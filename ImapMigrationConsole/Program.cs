@@ -19,13 +19,13 @@ namespace ImapMigrationConsole
                 Console.WriteLine("\t\t\tscheme = imap or imap-ssl");
                 Console.WriteLine("\t\t\tport is optional");
                 Console.WriteLine("\t\t\troot-folder is optional");
-                string url = Prompt("Source URL");
+                string url = Prompt("SourceURL");
                 
 
                 task.SourceServer = new ServerAddress(url);
 
 
-                url = Prompt("Destination URL");
+                url = Prompt("DestinationURL");
 
                 task.DestinationServer = new ServerAddress(url);
 
@@ -38,6 +38,10 @@ namespace ImapMigrationConsole
 
         private static string Prompt(string title, bool showCursor = true)
         {
+
+            if (System.IO.File.Exists(title + ".txt"))
+                return System.IO.File.ReadAllText(title + ".txt");
+
             Console.WriteLine(title);
             var cv = Console.CursorVisible;
             Console.CursorVisible = showCursor;

@@ -6,6 +6,9 @@ using System.Net;
 using System.Text;
 using System.Threading.Tasks;
 using MailKit;
+using MimeKit;
+using MailKit.Search;
+using System.Security.Cryptography;
 
 namespace ImapMigration
 {
@@ -16,6 +19,9 @@ namespace ImapMigration
     {
         private ImapClient sourceClient;
         private ImapClient destinationClient;
+        private TransferContext transferContext;
+
+        private SHA256 hash;
 
         /// <summary>
         /// 
@@ -28,9 +34,21 @@ namespace ImapMigration
         public ServerAddress DestinationServer { get; set; }
 
 
+        /// <summary>
+        /// 
+        /// </summary>
+        public bool CheckIfMessageExists { get; set; }
+
 
         public void Migrate() {
 
+            hash = SHA256.Create();
+
+            System.Data.SQLite.SQLiteConnectionStringBuilder cnstr = new System.Data.SQLite.SQLiteConnectionStringBuilder();
+            cnstr.DataSource = "Transfercontext.sdb";
+            System.Data.SQLite.SQLiteConnection conn = new System.Data.SQLite.SQLiteConnection(cnstr.ConnectionString);
+
+            transferContext = new TransferContext(conn, true);
 
             sourceClient = new ImapClient();
 
@@ -40,13 +58,17 @@ namespace ImapMigration
 
 
             sourceClient.Connect(SourceServer.Server, SourceServer.Port, SourceServer.SSL);
+            Console.WriteLine("Source server connected");
 
             destinationClient.Connect(DestinationServer.Server, DestinationServer.Port, DestinationServer.SSL);
+            Console.WriteLine("Destination server connected");
 
 
             sourceClient.Authenticate(SourceServer.Username,SourceServer.Password);
+            Console.WriteLine("Source server authenticated");
 
             destinationClient.Authenticate(DestinationServer.Username,DestinationServer.Password);
+            Console.WriteLine("Destination server authenticated");
 
             foreach (var ns in sourceClient.PersonalNamespaces) {
 
@@ -59,20 +81,228 @@ namespace ImapMigration
 
         private void CopyNamespace(FolderNamespace ns)
         {
-            Console.WriteLine(ns);
+            //Console.WriteLine(ns);
 
+            //Console.WriteLine(sourceClient.Inbox.FullName);
 
-            foreach (var folder in sourceClient.GetFolders(ns, false)) {
-                Console.WriteLine(folder.Name);
+            var folders = sourceClient.GetFolders(ns, false);
+
+            //Copy(sourceClient.Inbox,false);
+
+            var rootFolder = destinationClient.GetFolder(ns);
+
+            var destFolders = rootFolder.GetSubfolders(false).ToList();
+
+            var allFolders = destinationClient.GetFolders(ns, false);
+
+            foreach (var folder in folders) {
+                //Console.WriteLine(folder.FullName);
+                Copy(folder, true, destFolders);
             }
+        }
+
+        private void Copy(IMailFolder folder, bool create = true, IList<IMailFolder> destFolders = null)
+        {
+            IMailFolder dest = destinationClient.Inbox;
+
+            if (create)
+            {
+                dest = GetSubFolder(folder);
+                Console.WriteLine($"Folder exists {dest.FullName}");
+
+            }
+
+            CopyMessages(folder, dest);
+        }
+
+        private IMailFolder GetSubFolder(IMailFolder folder)
+        {
+            if (folder.ParentFolder == null) {
+                return destinationClient.GetFolder(destinationClient.PersonalNamespaces[0]);
+            }
+
+            var p = GetSubFolder(folder.ParentFolder);
+
+            var fs = p.GetSubfolders(false);
+
+            var e = fs.FirstOrDefault(x => x.Name.Equals(folder.Name, StringComparison.OrdinalIgnoreCase));
+            if (e != null)
+                return e;
+
+            try {
+                return p.GetSubfolder(folder.Name);
+            } catch {
+                Console.WriteLine($"Creating {folder.FullName}");
+                return p.Create(folder.Name, true);
+            }
+        }
+
+        private void CopyMessages(IMailFolder folder, IMailFolder dest)
+        {
+            try
+            {
+                folder.Open(FolderAccess.ReadOnly);
+
+                dest.Open(FolderAccess.ReadWrite);
+
+                UniqueIdRange r = new UniqueIdRange(UniqueId.MinValue, UniqueId.MaxValue);
+
+                var headers = new HashSet<HeaderId>();
+
+                headers.Add(HeaderId.Received);
+                headers.Add(HeaderId.Date);
+                headers.Add(HeaderId.MessageId);
+                headers.Add(HeaderId.Subject);
+                headers.Add(HeaderId.From);
+                headers.Add(HeaderId.To);
+                headers.Add(HeaderId.Cc);
+                headers.Add(HeaderId.ResentMessageId);
+
+
+                var msgList = folder.Fetch(r, 
+                    MessageSummaryItems.UniqueId
+                    | MessageSummaryItems.InternalDate
+                    | MessageSummaryItems.Flags, headers);
+
+                int total = msgList.Count;
+                int i = 1;
+
+                foreach (var msg in msgList) {
+                    Console.WriteLine($"Copying {i++} of {total}");
+                    CopyMessage(msg, folder, dest);
+                }
+
+            }
+            finally
+            {
+                folder.Close();
+                dest.Close();
+            }
+        }
+
+        private void CopyMessage(IMessageSummary msg, IMailFolder folder, IMailFolder dest)
+        {
+
+            if (MessageExists(msg, folder, dest))
+            {
+                return;
+            }
+
+            var m = folder.GetMessage(msg.UniqueId);
+
+            
+
+            //string rd = msg.Headers[HeaderId.Received];
+
+            dest.Append(m, 
+                msg.Flags == null ?  MessageFlags.None : msg.Flags.Value,  msg.InternalDate ?? (DateTimeOffset.Now));
+
+            StoreLocal(msg, folder);
+            
+        }
+
+        private void StoreLocal(IMessageSummary msg, IMailFolder folder)
+        {
+            string mid = msg.Headers[HeaderId.MessageId];
+            if (mid != null) {
+                transferContext.Messages.Add(new ImapMigration.Message {
+                    Url = DestinationServer.Url,
+                    MessageID = mid
+                });
+                transferContext.SaveChanges();
+                return;
+            }
+
+            transferContext.Messages.Add(new ImapMigration.Message {
+                Folder = folder.FullName,
+                Hash = GetHash(msg),
+                Url = DestinationServer.Url
+            });
+            transferContext.SaveChanges();
+        }
+
+        private bool MessageExists(IMessageSummary msg, IMailFolder folder, IMailFolder dest)
+        {
+            // check if message exists on dest...
+            string mid = msg.Headers[HeaderId.MessageId];
+
+            // check if exists locally only....
+
+
+            if (MessageExistsLocally(mid, msg, folder))
+                return true;
+
+            if (!CheckIfMessageExists)
+                return false;
+
+
+            SearchQuery query = null;
+
+            if (mid != null)
+            {
+                query = SearchQuery.HeaderContains("Message-ID", mid);
+            }
+            else
+            {
+                mid = msg.Headers[HeaderId.ResentMessageId];
+                if (mid != null)
+                {
+                    query = SearchQuery.HeaderContains("Resent-Message-ID", mid);
+                }
+                else
+                {
+                    Console.WriteLine($"No message id found for {msg.Headers[HeaderId.Subject]}");
+                }
+            }
+
+            if (query != null)
+            {
+                var ids = dest.Search(query);
+                if (ids.Count == 1)
+                {
+                    //Console.WriteLine("Message exists at destination");
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private bool MessageExistsLocally(string mid, IMessageSummary msg, IMailFolder folder)
+        {
+
+            if (mid != null)
+            {
+                if (transferContext.Messages.Any(x => x.Url == DestinationServer.Url && x.MessageID == mid))
+                    return true;
+            }
+
+            string hs = GetHash(msg);
+
+            if (transferContext.Messages.Any(x => x.Url == DestinationServer.Url && x.Folder == folder.FullName && x.Hash == hs))
+                return true;
+
+
+
+            return false;
+        }
+
+        private string GetHash(IMessageSummary msg)
+        {
+            string all = string.Join("\r\n", msg.Headers.Select(x => x.Field + ": " + x.Value));
+
+            var h = hash.ComputeHash(System.Text.Encoding.UTF8.GetBytes(all));
+            var hs = string.Join("", h.Select(x => x.ToString("x2")));
+            return hs;
         }
 
         public void Dispose()
         {
             sourceClient?.Dispose();
             destinationClient?.Dispose();
+            transferContext?.Dispose();
             sourceClient = null;
             destinationClient = null;
+            transferContext = null;
         }
     }
 
@@ -87,7 +317,9 @@ namespace ImapMigration
         public string Username { get;  }
 
         public string Password { get;  }
-        public object RootFolder { get; }
+        public string RootFolder { get; }
+
+        public string Url { get; set; }
 
         public ServerAddress(string url)
             :this(new Uri(url))
@@ -96,7 +328,7 @@ namespace ImapMigration
         }
 
         public ServerAddress(Uri uri) {
-
+            Url = uri.ToString();
             Server = uri.Host;
             Port = uri.Port;
             SSL = uri.Scheme.ToLower().Contains("ssl");
