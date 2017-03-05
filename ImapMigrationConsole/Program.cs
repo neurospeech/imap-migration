@@ -11,33 +11,41 @@ namespace ImapMigrationConsole
     {
         static void Main(string[] args)
         {
-            try
+            int i = 0;
+            while (i < 10)
             {
-                using (MigrationTask task = new MigrationTask())
+                try
                 {
-                    Console.WriteLine("URL Format is");
-                    Console.WriteLine("\tscheme://host:port?username=username&password=password&root-folder=INBOX.");
-                    Console.WriteLine("\t\t\tscheme = imap or imap-ssl");
-                    Console.WriteLine("\t\t\tport is optional");
-                    Console.WriteLine("\t\t\troot-folder is optional");
-                    string url = Prompt("SourceURL");
+                    using (MigrationTask task = new MigrationTask())
+                    {
+                        Console.WriteLine("URL Format is");
+                        Console.WriteLine("\tscheme://host:port?username=username&password=password&root-folder=INBOX.");
+                        Console.WriteLine("\t\t\tscheme = imap or imap-ssl");
+                        Console.WriteLine("\t\t\tport is optional");
+                        Console.WriteLine("\t\t\troot-folder is optional");
+                        string url = Prompt("SourceURL");
 
 
-                    task.SourceServer = new ServerAddress(url);
+                        task.SourceServer = new ServerAddress(url);
 
 
-                    url = Prompt("DestinationURL");
+                        url = Prompt("DestinationURL");
 
-                    task.DestinationServer = new ServerAddress(url);
+                        task.DestinationServer = new ServerAddress(url);
 
-                    task.Migrate();
+                        task.Migrate();
 
-                    //Console.ReadLine();
+                        //Console.ReadLine();
+                    }
+
+                    break;
                 }
-            }
-            catch (Exception ex) {
-                System.IO.File.AppendAllText("errors.txt", DateTimeOffset.Now.ToString() + "\r\n" + ex.ToString());
-                throw;
+                catch (Exception ex)
+                {
+                    System.IO.File.AppendAllText("errors.txt", DateTimeOffset.Now.ToString() + "\r\n" + ex.ToString());
+                    i++;
+                    continue;
+                }
             }
 
         }

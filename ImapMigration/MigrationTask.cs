@@ -9,6 +9,7 @@ using MailKit;
 using MimeKit;
 using MailKit.Search;
 using System.Security.Cryptography;
+using System.Data.SQLite;
 
 namespace ImapMigration
 {
@@ -22,6 +23,7 @@ namespace ImapMigration
         private TransferContext transferContext;
 
         private SHA256 hash;
+        private SQLiteConnection conn;
 
         /// <summary>
         /// 
@@ -46,7 +48,7 @@ namespace ImapMigration
 
             System.Data.SQLite.SQLiteConnectionStringBuilder cnstr = new System.Data.SQLite.SQLiteConnectionStringBuilder();
             cnstr.DataSource = "Transfercontext.sdb";
-            System.Data.SQLite.SQLiteConnection conn = new System.Data.SQLite.SQLiteConnection(cnstr.ConnectionString);
+            conn = new System.Data.SQLite.SQLiteConnection(cnstr.ConnectionString);
 
             transferContext = new TransferContext(conn, true);
 
@@ -87,7 +89,7 @@ namespace ImapMigration
 
             var folders = sourceClient.GetFolders(ns, false);
 
-            //Copy(sourceClient.Inbox,false);
+            Copy(sourceClient.Inbox,false);
 
             var rootFolder = destinationClient.GetFolder(ns);
 
@@ -203,22 +205,28 @@ namespace ImapMigration
 
         private void StoreLocal(IMessageSummary msg, IMailFolder folder)
         {
-            string mid = msg.Headers[HeaderId.MessageId];
-            if (mid != null) {
-                transferContext.Messages.Add(new ImapMigration.Message {
-                    Url = DestinationServer.Url,
-                    MessageID = mid
-                });
-                transferContext.SaveChanges();
-                return;
-            }
+            using (var tx = new TransferContext(conn, false))
+            {
+                string mid = msg.Headers[HeaderId.MessageId];
+                if (mid != null)
+                {
+                    tx.Messages.Add(new ImapMigration.Message
+                    {
+                        Url = DestinationServer.Url,
+                        MessageID = mid
+                    });
+                    tx.SaveChanges();
+                    return;
+                }
 
-            transferContext.Messages.Add(new ImapMigration.Message {
-                Folder = folder.FullName,
-                Hash = GetHash(msg),
-                Url = DestinationServer.Url
-            });
-            transferContext.SaveChanges();
+                tx.Messages.Add(new ImapMigration.Message
+                {
+                    Folder = folder.FullName,
+                    Hash = GetHash(msg),
+                    Url = DestinationServer.Url
+                });
+                tx.SaveChanges();
+            }
         }
 
         private bool MessageExists(IMessageSummary msg, IMailFolder folder, IMailFolder dest)
