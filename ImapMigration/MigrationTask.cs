@@ -192,12 +192,20 @@ namespace ImapMigration
 
             var m = folder.GetMessage(msg.UniqueId);
 
-            
+
 
             //string rd = msg.Headers[HeaderId.Received];
 
-            dest.Append(m, 
-                msg.Flags == null ?  MessageFlags.None : msg.Flags.Value,  msg.InternalDate ?? (DateTimeOffset.Now));
+            try
+            {
+                dest.Append(m,
+                    msg.Flags == null ? MessageFlags.None : msg.Flags.Value, msg.InternalDate ?? (DateTimeOffset.Now));
+            }
+            catch (Exception ex) {
+                if (!ex.Message.Contains("Message too large.")) {
+                    throw;
+                }
+            }
 
             StoreLocal(msg, folder);
             
