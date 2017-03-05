@@ -202,9 +202,28 @@ namespace ImapMigration
                     msg.Flags == null ? MessageFlags.None : msg.Flags.Value, msg.InternalDate ?? (DateTimeOffset.Now));
             }
             catch (Exception ex) {
-                if (!ex.Message.Contains("Message too large.")) {
+                /*if (!ex.Message.Contains("Message too large.")) {
                     throw;
+                }*/
+
+                // failed...
+
+                string failedFolder = "failed\\" + folder.FullName.Replace(folder.DirectorySeparator, '-');
+
+                string failed = failedFolder + "\\" + DateTime.UtcNow.Ticks + ".msg";
+                string reason = failed + ".reason.txt";
+
+                string dir = System.IO.Path.GetDirectoryName(failed);
+                if (!System.IO.Directory.Exists(dir))
+                    System.IO.Directory.CreateDirectory(dir);
+
+                using (var fs = System.IO.File.OpenWrite(failed)) {
+                    m.WriteTo(fs);
                 }
+
+                System.IO.File.WriteAllText(reason, ex.ToString());
+
+
             }
 
             StoreLocal(msg, folder);
