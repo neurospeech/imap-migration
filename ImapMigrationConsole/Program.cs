@@ -32,7 +32,7 @@ namespace ImapMigrationConsole
                         url = Prompt("DestinationURL");
 
                         task.DestinationServer = new ServerAddress(url);
-
+                        task.CheckIfMessageExists = true;
                         task.Migrate();
 
                         //Console.ReadLine();

@@ -172,6 +172,9 @@ namespace ImapMigration
                 foreach (var msg in msgList) {
                     Console.WriteLine($"Copying {i++} of {total}");
                     CopyMessage(msg, folder, dest);
+                    if (i % 100 == 0) {
+                        dest.Check();
+                    }
                 }
 
             }
